@@ -1,11 +1,39 @@
-Scanning all .so files under D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib...
+Starting full scan of APK extracted folder: D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted
+
+--- 1. Scanning .so files in APK folder ---
+
+
+[SCAN DIR] D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\arm64-v8a
+  File: D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\arm64-v8a\libtoolChecker.so
+[SO FILE] D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\arm64-v8a\libtoolChecker.so
 [4KB]  D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\arm64-v8a\libtoolChecker.so
+
+[SCAN DIR] D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\armeabi-v7a
+  File: D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\armeabi-v7a\libtoolChecker.so
+[SO FILE] D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\armeabi-v7a\libtoolChecker.so
 [4KB]  D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\armeabi-v7a\libtoolChecker.so
+
+[SCAN DIR] D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\x86
+  File: D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\x86\libtoolChecker.so
+[SO FILE] D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\x86\libtoolChecker.so
 [4KB]  D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\x86\libtoolChecker.so
+
+[SCAN DIR] D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\x86_64
+  File: D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\x86_64\libtoolChecker.so
+[SO FILE] D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\x86_64\libtoolChecker.so
 [4KB]  D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\x86_64\libtoolChecker.so
+
+--- 2. Scanning .so files inside .jar/.aar archives ---
+
+
+--- 3. Detecting potential native code in assets/.bin/.dat ---
+
+[POSSIBLE NATIVE] D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\DebugProbesKt.bin
 
 Scan Summary:
 Total .so files scanned: 4
 4 KB page size: 4
 16 KB page size: 0
-All .so files use 4 KB pages. No issues detected.
+Total archives scanned: 0
+Potential native content files (.bin/.dat): 1
+✅ All .so files use 4 KB pages. No issues detected.
