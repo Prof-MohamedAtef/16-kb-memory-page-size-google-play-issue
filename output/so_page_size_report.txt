@@ -1,0 +1,11 @@
+Scanning all .so files under D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib...
+[4KB]  D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\arm64-v8a\libtoolChecker.so
+[4KB]  D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\armeabi-v7a\libtoolChecker.so
+[4KB]  D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\x86\libtoolChecker.so
+[4KB]  D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted\lib\x86_64\libtoolChecker.so
+
+Scan Summary:
+Total .so files scanned: 4
+4 KB page size: 4
+16 KB page size: 0
+All .so files use 4 KB pages. No issues detected.
