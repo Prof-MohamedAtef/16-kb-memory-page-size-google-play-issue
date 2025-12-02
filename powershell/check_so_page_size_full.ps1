@@ -19,6 +19,9 @@ $totalArchives = 0
 $possibleNativeFiles = 0 # Total number of files checked in the deep scan (Section 3)
 $hiddenElfCount = 0 # Count of files confirmed to be hidden ELF binaries
 
+# Stores all unique extensions processed for the final summary
+$scannedExtensions = New-Object System.Collections.Generic.HashSet[string]
+
 # Directories to scan deeply for hidden native code in Section 3
 $deepScanDirs = @(
     (Join-Path $apkExtractRoot "assets"),
@@ -158,6 +161,8 @@ Add-Content -Path $reportFile -Value "`n--- 1. Scanning standard .so files in AP
 
 $soFiles = Get-ChildItem -Path $apkExtractRoot -Recurse -Filter *.so -File
 foreach ($so in $soFiles) {
+    # Track extension
+    [void]$scannedExtensions.Add($so.Extension)
     Log-DirectoryFiles $so.DirectoryName
     Check-SoFile $so.FullName
 }
@@ -179,6 +184,8 @@ if ($foundArchiveCount -gt 0) {
     Add-Content -Path $reportFile -Value "Listing found archives:"
     
     foreach ($archive in $archives) {
+        # Track extension
+        [void]$scannedExtensions.Add($archive.Extension)
         # Log the name of the found archive
         $archiveNameMsg = "  - $($archive.FullName)"
         Write-Host $archiveNameMsg -ForegroundColor Gray
@@ -206,6 +213,8 @@ if ($foundArchiveCount -gt 0) {
 
             if ($soCountInArchive -gt 0) {
                 foreach ($so in $soFilesInArchive) {
+                    # Track extension
+                    [void]$scannedExtensions.Add($so.Extension)
                     # Enhanced Logging: Report the specific .so file being processed
                     $soFileMsg = "  - Processing extracted file: $($so.BaseName)$($so.Extension)"
                     Write-Host $soFileMsg -ForegroundColor Gray
@@ -258,6 +267,8 @@ if ($nativeFileCount -gt 0) {
     Add-Content -Path $reportFile -Value "Starting detailed analysis for potential native files (checking ELF signature):"
     
     foreach ($file in $filesToAnalyze) {
+        # Track extension
+        [void]$scannedExtensions.Add($file.Extension)
         # Call the new analysis function for each potential native file
         Analyze-PossibleNativeFile $file.FullName
     }
@@ -267,6 +278,11 @@ if ($nativeFileCount -gt 0) {
 # -------------------------------
 # 4. Summary
 # -------------------------------
+
+# Sort and format the list of scanned extensions
+$extensionList = $scannedExtensions | Sort-Object | ForEach-Object { "`t- " + $_ }
+$extensionListString = $extensionList -join "`n"
+
 $summary = @"
 `nScan Summary:
 Total ELF binaries scanned (Standard .so + Hidden ELF): $totalSoFiles
@@ -275,6 +291,9 @@ Total ELF binaries scanned (Standard .so + Hidden ELF): $totalSoFiles
 Total archives scanned: $totalArchives
 Total files analyzed in Deep Scan (Section 3): $possibleNativeFiles
 Hidden ELF binaries confirmed and checked in Section 3: $hiddenElfCount
+
+Extensions Scanned for Native Code:
+$extensionListString
 "@
 
 Write-Host $summary -ForegroundColor Yellow
