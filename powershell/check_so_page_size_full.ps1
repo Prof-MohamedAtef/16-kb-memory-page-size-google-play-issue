@@ -27,7 +27,8 @@ $deepScanDirs = @(
     $apkExtractRoot # In case non-standard files are at the root
 )
 # File extensions to ignore in the deep scan (common config/asset files)
-$ignoreExtensions = @(".txt", ".xml", ".json", ".properties", ".config", ".dex", ".classes", ".ttf", ".png", ".jpg", ".webp", ".zip")
+# .zip REMOVED to allow deeper analysis on suspicious archives in Section 3.
+$ignoreExtensions = @(".txt", ".xml", ".json", ".properties", ".config", ".dex", ".classes", ".ttf", ".png", ".jpg", ".webp")
 
 # -------------------------------
 # Helper function: Check .so page alignment
