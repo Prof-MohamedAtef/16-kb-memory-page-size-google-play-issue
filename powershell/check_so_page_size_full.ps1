@@ -23,16 +23,12 @@ $hiddenElfCount = 0 # Count of files confirmed to be hidden ELF binaries
 $scannedExtensions = New-Object System.Collections.Generic.HashSet[string]
 
 # Directories to scan deeply for hidden native code in Section 3
-# Expanded to include META-INF
 $deepScanDirs = @(
     (Join-Path $apkExtractRoot "assets"),
     (Join-Path $apkExtractRoot (Join-Path "res" "raw")),
-    (Join-Path $apkExtractRoot "META-INF"), # ADDED META-INF
+    (Join-Path $apkExtractRoot "META-INF"),
     $apkExtractRoot # Root directory
 )
-
-# For this diagnostic run, the $ignoreExtensions list is NOT used in the filtering logic
-# in Section 3 to ensure every file is checked.
 
 # -------------------------------
 # Helper function: Check .so page alignment
@@ -97,7 +93,7 @@ function Analyze-PossibleNativeFile {
 
     # Log the file name being checked
     $fileLogMsg = "[POSSIBLE NATIVE] Analyzing $($filePath)"
-    Write-Host $fileLogMsg -ForegroundColor Yellow
+    # Note: We skip Write-Host here to keep the progress bar clean
     Add-Content -Path $reportFile -Value $fileLogMsg
     
     # Increment the script counter for files checked in this section
@@ -133,10 +129,10 @@ function Analyze-PossibleNativeFile {
 
     if (-not $isElf) {
         $msg = "[SKIP] File is not an ELF binary (likely data/asset)."
-        Write-Host $msg -ForegroundColor Gray
+        # Write-Host $msg -ForegroundColor Gray # Skip Write-Host to keep progress bar clean
         Add-Content -Path $reportFile -Value $msg
     }
-    Write-Host "" # Newline for separation
+    # Write-Host "" # Skip Write-Host to keep progress bar clean
     Add-Content -Path $reportFile -Value ""
 }
 
@@ -265,12 +261,28 @@ if ($nativeFileCount -gt 0) {
     Write-Host "Starting detailed analysis for potential native files (checking ELF signature):" -ForegroundColor Yellow
     Add-Content -Path $reportFile -Value "Starting detailed analysis for potential native files (checking ELF signature):"
     
+    # Progress bar variables
+    $i = 0
+    $total = $filesToAnalyze.Count
+
     foreach ($file in $filesToAnalyze) {
+        $i++
+        $percent = [int](($i / $total) * 100)
+        
+        # --- PROGRESS INDICATOR ---
+        Write-Progress -Activity "Deep Scanning for Hidden ELF Binaries" `
+                       -Status "File $i of $total: $($file.Name)" `
+                       -PercentComplete $percent
+        # --------------------------
+
         # Track extension
         [void]$scannedExtensions.Add($file.Extension)
         # Call the new analysis function for each potential native file
         Analyze-PossibleNativeFile $file.FullName
     }
+    
+    # Clear the progress bar upon completion
+    Write-Progress -Activity "Deep Scanning for Hidden ELF Binaries" -Status "Complete" -Completed
 }
 
 
