@@ -8,8 +8,8 @@ $reportFile = "D:\stc-work\16kb-issue\output\so_page_size_report.txt"
 # Clear previous report
 if (Test-Path $reportFile) { Remove-Item $reportFile }
 
-Write-Host "Starting full scan of APK extracted folder..." -ForegroundColor Cyan
-Add-Content -Path $reportFile -Value "Starting full scan of APK extracted folder: $apkExtractRoot"
+Write-Host "Starting FULL DIAGNOSTIC scan of APK extracted folder..." -ForegroundColor Cyan
+Add-Content -Path $reportFile -Value "Starting FULL DIAGNOSTIC scan of APK extracted folder: $apkExtractRoot"
 
 # Counters (Accessed via $script: scope inside functions)
 $totalSoFiles = 0 # Total number of confirmed ELF binaries checked (standard .so + hidden ELF)
@@ -23,15 +23,16 @@ $hiddenElfCount = 0 # Count of files confirmed to be hidden ELF binaries
 $scannedExtensions = New-Object System.Collections.Generic.HashSet[string]
 
 # Directories to scan deeply for hidden native code in Section 3
+# Expanded to include META-INF
 $deepScanDirs = @(
     (Join-Path $apkExtractRoot "assets"),
-    # FIX: Nested Join-Path call to join three components correctly
     (Join-Path $apkExtractRoot (Join-Path "res" "raw")),
-    $apkExtractRoot # In case non-standard files are at the root
+    (Join-Path $apkExtractRoot "META-INF"), # ADDED META-INF
+    $apkExtractRoot # Root directory
 )
-# File extensions to ignore in the deep scan (common config/asset files)
-# .zip REMOVED to allow deeper analysis on suspicious archives in Section 3.
-$ignoreExtensions = @(".txt", ".xml", ".json", ".properties", ".config", ".dex", ".classes", ".ttf", ".png", ".jpg", ".webp")
+
+# For this diagnostic run, the $ignoreExtensions list is NOT used in the filtering logic
+# in Section 3 to ensure every file is checked.
 
 # -------------------------------
 # Helper function: Check .so page alignment
@@ -240,25 +241,23 @@ if ($foundArchiveCount -gt 0) {
 # -------------------------------
 # 3. Detect and Analyze potential native code in arbitrary locations
 # -------------------------------
-Write-Host "`n--- 3. DETAILED SCAN: Analyzing ALL files in known data paths for hidden ELF binaries ---`n" -ForegroundColor Magenta
-Add-Content -Path $reportFile -Value "`n--- 3. DETAILED SCAN: Analyzing ALL files in known data paths for hidden ELF binaries ---`n"
+Write-Host "`n--- 3. DETAILED DIAGNOSTIC SCAN: Checking ALL files for hidden ELF binaries ---`n" -ForegroundColor Magenta
+Add-Content -Path $reportFile -Value "`n--- 3. DETAILED DIAGNOSTIC SCAN: Checking ALL files for hidden ELF binaries ---`n"
 
 $filesToAnalyze = @()
 foreach ($dir in $deepScanDirs) {
     if (Test-Path $dir) {
-        # Get all files recursively in the deep scan directory
+        # Get all files recursively in the deep scan directory, NO FILTERING APPLIED HERE
         $filesToAnalyze += Get-ChildItem -Path $dir -Recurse -File
     }
 }
 
-# Filter out common, non-native file types for efficiency
-$filesToAnalyze = $filesToAnalyze | Where-Object { 
-    $_.Extension -notin $ignoreExtensions -and $_.Name -notmatch "resources.arsc"
-} | Select-Object -Unique
+# Remove only the known metadata file that might be large but is not executable
+$filesToAnalyze = $filesToAnalyze | Where-Object { $_.Name -notmatch "resources.arsc" } | Select-Object -Unique
 
 $nativeFileCount = $filesToAnalyze.Count
 
-$nativeSummaryMsg = "[INFO] Found $nativeFileCount file(s) to analyze for hidden native code."
+$nativeSummaryMsg = "[INFO] Found $nativeFileCount file(s) to analyze for hidden native code (NO EXTENSION FILTERING)."
 Write-Host $nativeSummaryMsg -ForegroundColor Yellow
 Add-Content -Path $reportFile -Value $nativeSummaryMsg
 
@@ -300,8 +299,8 @@ Write-Host $summary -ForegroundColor Yellow
 Add-Content -Path $reportFile -Value $summary
 
 if ($count16KB -gt 0) {
-    Write-Host "⚠️ Warning: Some ELF binaries require 16 KB pages! This may cause issues on Android 14+ devices. Check the report for file names." -ForegroundColor Red
-    Add-Content -Path $reportFile -Value "⚠️ Warning: Some ELF binaries require 16 KB pages! This may cause issues on Android 14+ devices. Check the report for file names."
+    Write-Host "⚠️ FATAL WARNING: Some ELF binaries require 16 KB pages! This is the cause of your Google Play rejection. Check the report for file names." -ForegroundColor Red
+    Add-Content -Path $reportFile -Value "⚠️ FATAL WARNING: Some ELF binaries require 16 KB pages! This is the cause of your Google Play rejection. Check the report for file names."
 } else {
     Write-Host "✅ All ELF binaries (Standard .so and confirmed Hidden ELF) use 4 KB pages. No 16KB issues detected." -ForegroundColor Green
     Add-Content -Path $reportFile -Value "✅ All ELF binaries (Standard .so and confirmed Hidden ELF) use 4 KB pages. No 16KB issues detected."

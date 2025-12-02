@@ -1,4 +1,4 @@
-Starting full scan of APK extracted folder: D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted
+Starting FULL DIAGNOSTIC scan of APK extracted folder: D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted
 
 --- 1. Scanning standard .so files in APK folder ---
 
@@ -27,5 +27,5 @@ Starting full scan of APK extracted folder: D:\stc-work\project\ir-android\ir-mo
 
 [INFO] Found 0 archive(s) (.jar/.aar) to scan.
 
---- 3. DETAILED SCAN: Analyzing ALL files in known data paths for hidden ELF binaries ---
+--- 3. DETAILED DIAGNOSTIC SCAN: Checking ALL files for hidden ELF binaries ---
 
