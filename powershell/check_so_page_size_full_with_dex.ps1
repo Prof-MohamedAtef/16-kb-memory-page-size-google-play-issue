@@ -135,7 +135,7 @@ function Analyze-PossibleNativeFile {
 }
 
 # -------------------------------
-# Scan all .so files recursively in APK folder
+# 1. Scan all .so files recursively in APK folder
 # -------------------------------
 Write-Host "`n--- 1. Scanning standard .so files ---`n" -ForegroundColor Magenta
 Add-Content -Path $reportFile -Value "`n--- 1. Scanning standard .so files ---`n"
@@ -151,7 +151,7 @@ foreach ($so in $soFiles) {
 }
 
 # -------------------------------
-# Scan .so files inside .jar/.aar archives
+# 2. Scan .so files inside .jar/.aar archives
 # -------------------------------
 Write-Host "`n--- 2. Scanning .so files inside .jar/.aar archives ---`n" -ForegroundColor Magenta
 Add-Content -Path $reportFile -Value "`n--- 2. Scanning .so files inside .jar/.aar archives ---`n"
@@ -190,7 +190,7 @@ foreach ($archive in $archives) {
 }
 
 # -------------------------------
-# Deep scan for hidden ELF binaries
+# 3. Deep scan for hidden ELF binaries
 # -------------------------------
 Write-Host "`n--- 3. Deep scan for hidden ELF binaries ---`n" -ForegroundColor Magenta
 Add-Content -Path $reportFile -Value "`n--- 3. Deep scan for hidden ELF binaries ---`n"
@@ -210,7 +210,7 @@ foreach ($dir in $deepScanDirs) {
 }
 
 # -------------------------------
-# Scan .dex files for embedded native strings
+# 4. Scan .dex files for embedded native strings
 # -------------------------------
 Write-Host "`n--- 4. Scanning .dex files for JNI/native hints ---`n" -ForegroundColor Magenta
 Add-Content -Path $reportFile -Value "`n--- 4. Scanning .dex files for JNI/native hints ---`n"
@@ -222,13 +222,24 @@ foreach ($dex in $dexFiles) {
     $dexCounter++
     Show-Spinner "Scanning DEX files (${dexCounter}/${script:totalDexFiles})"
     [void]$scannedExtensions.Add($dex.Extension)
-    $content = Get-Content -Path $dex.FullName -Encoding Byte -ErrorAction SilentlyContinue
-    $nativeMatches = ($content | ForEach-Object { $_ } | Select-String -Pattern "lib.*\.so")
-    $matchCount = $nativeMatches.Count
-    if ($matchCount -gt 0) {
-        $script:dexNativeHints += $matchCount
-        Write-Host "[DEX NATIVE HINT] ${dex.FullName} -> $matchCount matches" -ForegroundColor Cyan
-        Add-Content -Path $reportFile -Value "[DEX NATIVE HINT] ${dex.FullName} -> $matchCount matches"
+
+    try {
+        # Optimized DEX scan
+        $byteContent = [System.IO.File]::ReadAllBytes($dex.FullName)
+        $asciiContent = [System.Text.Encoding]::ASCII.GetString($byteContent)
+        $matches = [regex]::Matches($asciiContent, "lib.*?\.so")
+        $matchCount = $matches.Count
+
+        if ($matchCount -gt 0) {
+            $script:dexNativeHints += $matchCount
+            $msg = "[DEX NATIVE HINT] ${dex.FullName} -> $matchCount matches"
+            Write-Host $msg -ForegroundColor Cyan
+            Add-Content -Path $reportFile -Value $msg
+        }
+    } catch {
+        $errMsg = "[ERROR] Could not scan DEX ${dex.FullName}: $($_.Exception.Message)"
+        Write-Host $errMsg -ForegroundColor Red
+        Add-Content -Path $reportFile -Value $errMsg
     }
 }
 
