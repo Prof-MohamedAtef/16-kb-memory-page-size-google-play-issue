@@ -1,23 +1,17 @@
-# check_so_page_size_full_with_dex.ps1
-# Full diagnostic scanner:
-# - scans .so files (including inside archives)
-# - runs llvm-readelf -l to detect 16KB (0x4000) alignment
-# - scans .dex files for JNI/native strings
-# - attempts detection of hidden ELF inside arbitrary files (assets/.bin/.dat)
-# - scans nested archives (jar/aar/zip)
-# - writes a detailed report
+# check_so_page_size_full_with_progress.ps1
+# Full diagnostic scanner with progress indicators (Option D)
 
 # -------------------------------
 # Configurations - EDIT THESE
 # -------------------------------
 $readelf = "D:\AndroidStudioSDK\Sdk\ndk\29.0.14206865\toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-readelf.exe"
-$apkExtractRoot = "D:\stc-work\project\ir-android\ir-mobile-android\app\release\aab_extract\universal_extracted"
+$apkExtractRoot = "D:\stc-work\project\ir-android\ir-mobile-android\app\Production\release\universal_extracted"
 $reportFile = "D:\stc-work\16kb-issue\output\so_page_size_report.txt"
 
-# Maximum nested archive extraction depth
+# nested archive extraction depth
 $maxNestedDepth = 2
 
-# Patterns to search inside .dex and other text-containing files for JNI/native usage
+# dex search patterns
 $dexPatterns = @(
     "JNI_OnLoad",
     "RegisterNatives",
@@ -25,78 +19,78 @@ $dexPatterns = @(
     "System.load",
     "dlopen",
     "native ",
-    "native$",
     "JNIEXPORT",
     "JNINativeMethod"
 )
 
-# Signatures for binary format detection (hex bytes => decimal array)
+# file signatures
 $signatures = @{
-    "ELF"   = [byte[]](0x7F,0x45,0x4C,0x46)           # 7F 'E' 'L' 'F'
-    "ZIP"   = [byte[]](0x50,0x4B,0x03,0x04)           # PK..
-    "GZIP"  = [byte[]](0x1F,0x8B)                     # \x1F\x8B
-    "LZ4"   = [byte[]](0x04,0x22,0x4D,0x18)           # LZ4 frame (common header)
-    "BR"    = [byte[]](0xCE,0xB2,0xCF,0x81)           # brotli uncommon; fallback by extension
-    "XZ"    = [byte[]](0xFD,0x37,0x7A,0x58)           # xz
+    "ELF"  = [byte[]](0x7F,0x45,0x4C,0x46)
+    "ZIP"  = [byte[]](0x50,0x4B,0x03,0x04)
+    "GZIP" = [byte[]](0x1F,0x8B)
+    "LZ4"  = [byte[]](0x04,0x22,0x4D,0x18)
+    "XZ"   = [byte[]](0xFD,0x37,0x7A,0x58)
 }
 
 # -------------------------------
-# Setup
+# Pre-checks & setup
 # -------------------------------
 if (-not (Test-Path $apkExtractRoot)) {
-    Write-Error "apkExtractRoot path does not exist: $apkExtractRoot"
+    Write-Error "apkExtractRoot does not exist: $apkExtractRoot"
     return
 }
 
-# Ensure output folder exists
 $reportDir = Split-Path -Parent $reportFile
 if (-not (Test-Path $reportDir)) { New-Item -ItemType Directory -Path $reportDir -Force | Out-Null }
 
-# Clean previous report
+# remove previous report
 if (Test-Path $reportFile) { Remove-Item $reportFile -Force }
 
+# write header
 Add-Content -Path $reportFile -Value ("Scan started: " + (Get-Date).ToString("o"))
 Add-Content -Path $reportFile -Value ("Root: " + $apkExtractRoot)
 Add-Content -Path $reportFile -Value ""
 
-Write-Host "Starting enhanced diagnostic scan..." -ForegroundColor Cyan
+Write-Host "Starting enhanced diagnostic scan (with progress)..." -ForegroundColor Cyan
 
 # -------------------------------
-# Counters & tracking
+# Counters & trackers
 # -------------------------------
-$script:totalSoFiles = 0
-$script:count4KB = 0
-$script:count16KB = 0
+$script:totalSoFiles   = 0
+$script:count4KB      = 0
+$script:count16KB     = 0
 $script:totalArchives = 0
 $script:possibleNativeFiles = 0
 $script:hiddenElfCount = 0
-
 $script:scannedDexFiles = 0
 $script:dexMatches = 0
-
 $script:scannedExtensions = New-Object System.Collections.Generic.HashSet[string]
 
-# Temp workspace base
+# temp workspace
 $tempRoot = Join-Path $env:TEMP ("apk_scan_" + [System.Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 
-# Add-Type for zip handling
-try {
-    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
-} catch {
-    # continue; Expand-Archive is available in PS 5+
+# try load compression assembly
+try { Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue } catch {}
+
+# spinner chars
+$spinner = @("|","/","-","\") 
+$spinIndex = 0
+
+# small helper to update spinner
+function Get-Spinner { 
+    $global:spinIndex = ($global:spinIndex + 1) % $spinner.Length
+    return $spinner[$global:spinIndex]
 }
 
-# -------------------------------
-# Helpers
-# -------------------------------
-
+# write log function
 function Write-Log {
-    param($msg, [string]$color = "White")
+    param([string]$msg, [ConsoleColor]$color = "White")
     Write-Host $msg -ForegroundColor $color
     Add-Content -Path $reportFile -Value $msg
 }
 
+# read header bytes
 function Read-FileHeader {
     param([string]$path, [int]$count = 8)
     try {
@@ -107,6 +101,7 @@ function Read-FileHeader {
     }
 }
 
+# signature match
 function Match-Signature {
     param([byte[]]$buf, [byte[]]$sig)
     if (-not $buf) { return $false }
@@ -117,36 +112,38 @@ function Match-Signature {
     return $true
 }
 
-# Safely run readelf and return output lines (or error text)
+# run readelf safely
 function Run-Readelf {
     param([string]$soPath)
     try {
-        # Use call operator and pass path as argument - avoids quoting problems
-        $out = & $readelf -l $soPath 2>&1
+        $out = & "$readelf" $soPath 2>&1
         return $out
     } catch {
-        return @("ERROR: readelf failed: " + $_.Exception.Message)
+        $ex = $_
+        return @("ERROR: readelf failed: " + $ex.Exception.Message)
     }
 }
 
-# Check .so file and update counters
+# check .so and update counters
 function Check-SoFile {
     param([string]$soPath, [string]$parentArchive = "")
 
     if (-not (Test-Path $soPath)) {
-        Write-Log ("[SKIP] .so missing: " + $soPath) "Yellow"
+        Write-Log ("[SKIP] missing: " + $soPath) "Yellow"
         return
     }
 
     $script:totalSoFiles++
-    $script:scannedExtensions.Add((Split-Path $soPath -LeafExtension) | Out-Null ; (Get-Item $soPath).Extension) | Out-Null
+    try {
+        $ext = (Get-Item $soPath).Extension
+        $script:scannedExtensions.Add($ext) | Out-Null
+    } catch {}
 
     $label = if ($parentArchive) { "[SO] " + $soPath + " (inside " + $parentArchive + ")" } else { "[SO] " + $soPath }
     Write-Log $label "Cyan"
 
     $out = Run-Readelf $soPath
 
-    # Check for 0x4000 alignment anywhere in readelf output
     $requires16KB = $false
     foreach ($line in $out) {
         if ($line -match "0x4000") { $requires16KB = $true; break }
@@ -160,17 +157,16 @@ function Check-SoFile {
         $script:count4KB++
     }
 
-    # Add the readelf output to report for traceability (optional — comment if too verbose)
+    # append readelf output to report (optional)
     Add-Content -Path $reportFile -Value ("--- readelf for: " + $soPath)
     Add-Content -Path $reportFile -Value ($out -join "`n")
     Add-Content -Path $reportFile -Value ""
 }
 
-# Extract archive to folder (safe) and return extracted path or $null
+# extract archive -> destDir, return $true/$false
 function Extract-Archive-To {
     param([string]$archivePath, [string]$destDir)
     try {
-        # Prefer ZipFile if available
         if (Get-Command Expand-Archive -ErrorAction SilentlyContinue) {
             Expand-Archive -LiteralPath $archivePath -DestinationPath $destDir -Force -ErrorAction Stop
         } else {
@@ -178,204 +174,135 @@ function Extract-Archive-To {
         }
         return $true
     } catch {
-        $err = $_.Exception.Message
-        Write-Log ("[ERROR] Failed to extract " + $archivePath + ": " + $err) "Yellow"
+        $ex = $_
+        Write-Log ("[ERROR] Failed to extract " + $archivePath + ": " + $ex.Exception.Message) "Yellow"
         return $false
     }
 }
 
-# Recursively scan a folder for .so and nested archives (depth limited)
+# Scan a folder (non-recursively) for .so and archives, recursively scanning extracted archives when found
 function Scan-Folder-For-Native {
     param([string]$folder, [int]$depth = 0)
 
-    if ($depth -lt 0) { return }
+    if ($depth -gt $maxNestedDepth) { return }
 
-    # Log directory
     Write-Log ("[DIR] " + $folder) "Magenta"
 
-    # Process direct .so files
-    Get-ChildItem -Path $folder -Filter *.so -File -ErrorAction SilentlyContinue | ForEach-Object {
-        Check-SoFile $_.FullName
+    # direct .so files in this folder (non-recursive)
+    $soFiles = Get-ChildItem -Path $folder -Filter *.so -File -ErrorAction SilentlyContinue
+    $i = 0
+    $total = $soFiles.Count
+    foreach ($s in $soFiles) {
+        $i++
+        $pct = [int](($i / [double]($total) * 100))
+        Write-Progress -Activity "Scanning .so in folder" -Status (Get-Spinner) -PercentComplete $pct -CurrentOperation $s.FullName
+        Check-SoFile $s.FullName
     }
 
-    # Find archives to extract (.jar, .aar, .zip)
-    $archives = Get-ChildItem -Path $folder -Include *.jar,*.aar,*.zip -File -Recurse -Depth 0 -ErrorAction SilentlyContinue 2>$null
-    foreach ($archive in $archives) {
+    # archives within this folder (non-recursive)
+    $archives = Get-ChildItem -Path $folder -Include *.jar,*.aar,*.zip -File -ErrorAction SilentlyContinue
+    $j = 0
+    $totalA = $archives.Count
+    foreach ($a in $archives) {
+        $j++
+        $pctA = [int](($j / [double]($totalA) * 100))
+        Write-Progress -Activity "Processing archives in folder" -Status (Get-Spinner) -PercentComplete $pctA -CurrentOperation $a.FullName
+
         $script:totalArchives++
-        Write-Log ("[ARCHIVE FOUND] " + $archive.FullName) "Cyan"
+        Write-Log ("[ARCHIVE FOUND] " + $a.FullName) "Cyan"
 
         $tmp = Join-Path $tempRoot ([System.Guid]::NewGuid().ToString())
         New-Item -ItemType Directory -Path $tmp | Out-Null
-        $ok = Extract-Archive-To $archive.FullName $tmp
+        $ok = Extract-Archive-To $a.FullName $tmp
         if ($ok) {
-            # Scan extracted contents
+            # scan extracted folder recursively for .so and nested archives
             Scan-Folder-For-Native $tmp ($depth + 1)
-            # If depth allowed, scan nested archives
-            if ($depth -lt $maxNestedDepth) {
-                Get-ChildItem -Path $tmp -Include *.jar,*.aar,*.zip -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-                    $nestedTmp = Join-Path $tempRoot ([System.Guid]::NewGuid().ToString())
-                    New-Item -ItemType Directory -Path $nestedTmp | Out-Null
-                    if (Extract-Archive-To $_.FullName $nestedTmp) {
-                        Scan-Folder-For-Native $nestedTmp ($depth + 1)
-                    }
-                    Remove-Item $nestedTmp -Recurse -Force -ErrorAction SilentlyContinue
-                }
-            }
         }
         Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
+
+    # clear progress when finishing folder
+    Write-Progress -Activity "Scanning .so in folder" -Completed
 }
 
-# Find any file that contains ELF magic in a folder (no extension assumption)
-function Detect-ELF-In-Files {
-    param([string]$folder)
-    Get-ChildItem -Path $folder -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-        $f = $_.FullName
-        $hdr = Read-FileHeader $f 4
-        if ($hdr) {
-            if (Match-Signature $hdr $signatures["ELF"]) {
-                # Found hidden ELF
-                $script:hiddenElfCount++
-                Write-Log ("[HIDDEN ELF FOUND] " + $f) "Magenta"
-                # Check this as an ELF binary
-                Check-SoFile $f "[HIDDEN ELF]"
-            } else {
-                # record extension scanned
-                try { $script:scannedExtensions.Add($_.Extension) | Out-Null } catch {}
-            }
-        }
-    }
-}
-
-# Scan .dex for JNI/native strings
-function Scan-Dex-For-JNI {
-    param([string]$dexPath)
-    if (-not (Test-Path $dexPath)) { return }
-    $script:scannedDexFiles++
-
-    Write-Log ("[DEX] Scanning: " + $dexPath) "Cyan"
-
-    # Try text search for patterns - many strings are embedded in dex as plain ASCII
-    foreach ($p in $dexPatterns) {
-        try {
-            $matches = Select-String -Path $dexPath -Pattern $p -SimpleMatch -Raw -ErrorAction SilentlyContinue
-            if ($matches) {
-                foreach ($m in $matches) {
-                    Write-Log ("[DEX MATCH] pattern: '" + $p + "' in " + $dexPath + " -> " + $m.Line.Trim()) "Yellow"
-                    $script:dexMatches++
-                }
-            }
-        } catch {
-            # If Select-String fails on binary, fallback to manual byte scanning for ASCII string
-            try {
-                $bytes = Get-Content -Path $dexPath -Encoding Byte -ErrorAction SilentlyContinue
-                $txt = [System.Text.Encoding]::ASCII.GetString($bytes)
-                if ($txt.IndexOf($p, [StringComparison]::InvariantCultureIgnoreCase) -ge 0) {
-                    Write-Log ("[DEX MATCH-BYTES] pattern: '" + $p + "' in " + $dexPath) "Yellow"
-                    $script:dexMatches++
-                }
-            } catch {
-                Write-Log ("[ERROR] Could not search dex file: " + $dexPath + " (" + $_.Exception.Message + ")") "Yellow"
-            }
-        }
-    }
-}
-
-# Try to detect compressed ELF inside a file by checking for nested zip/elf/gzip signatures in its bytes
+# detect signatures by reading header
 function Detect-CompressedContainers {
     param([string]$filePath)
     $hdr = Read-FileHeader $filePath 16
     if (-not $hdr) { return $null }
 
-    # quick checks
     foreach ($k in $signatures.Keys) {
         $sig = $signatures[$k]
-        if (Match-Signature $hdr $sig) {
-            return $k
-        }
+        if (Match-Signature $hdr $sig) { return $k }
     }
 
-    # also check for "PK" at offset >0 (embedded zip)
+    # scan first 4k bytes for PK (embedded zip)
     try {
         $raw = Get-Content -Path $filePath -Encoding Byte -TotalCount 4096 -ErrorAction SilentlyContinue
-        for ($i=0; $i -lt ($raw.Length - 4); $i++) {
-            if ($raw[$i] -eq 0x50 -and $raw[$i+1] -eq 0x4B) {
-                return "ZIP-EMBED"
-            }
+        for ($i=0; $i -lt ($raw.Length - 1); $i++) {
+            if ($raw[$i] -eq 0x50 -and $raw[$i+1] -eq 0x4B) { return "ZIP-EMBED" }
         }
-    } catch { }
+    } catch {}
 
     return $null
 }
 
-# Analyze arbitrary file (assets, .bin, .dat, etc.) for hidden ELF or compressed containers
+# analyze an arbitrary file for embedded ELF or containers
 function Analyze-ArbitraryFile {
     param([string]$filePath)
 
     $script:possibleNativeFiles++
     Write-Log ("[ANALYZE] " + $filePath) "Yellow"
+
     try {
         $container = Detect-CompressedContainers $filePath
         if ($container -eq "ELF") {
             $script:hiddenElfCount++
-            Write-Log ("[FOUND ELF-MAGIC] " + $filePath) "Magenta"
+            Write-Log ("[HIDDEN ELF] raw ELF magic in " + $filePath) "Magenta"
             Check-SoFile $filePath "[HIDDEN ELF]"
             return
         } elseif ($container -in @("ZIP","ZIP-EMBED")) {
-            Write-Log ("[FOUND ZIP] Attempt extracting embedded zip from " + $filePath) "Yellow"
+            Write-Log ("[ZIP] Attempt extracting embedded zip from " + $filePath) "Yellow"
             $tmp = Join-Path $tempRoot ([System.Guid]::NewGuid().ToString())
             New-Item -ItemType Directory -Path $tmp | Out-Null
-            # Try to extract directly if it is a zip
             $ok = $false
-            try {
-                if ($container -eq "ZIP") {
-                    $ok = Extract-Archive-To $filePath $tmp
-                } else {
-                    # For zip embed, we try naive strategy: copy the file and attempt to open as zip (may fail)
-                    $tmpZip = Join-Path $tmp "embedded.zip"
-                    Copy-Item -Path $filePath -Destination $tmpZip -Force
-                    $ok = Extract-Archive-To $tmpZip $tmp
-                }
-            } catch {
-                $ok = $false
+            if ($container -eq "ZIP") {
+                $ok = Extract-Archive-To $filePath $tmp
+            } else {
+                # attempt to copy and open as zip
+                $tmpZip = Join-Path $tmp "embedded.zip"
+                Copy-Item -Path $filePath -Destination $tmpZip -Force
+                $ok = Extract-Archive-To $tmpZip $tmp
             }
-            if ($ok) {
-                Scan-Folder-For-Native $tmp 0
-            }
+            if ($ok) { Scan-Folder-For-Native $tmp 0 }
             Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
             return
-        } elseif ($container -in @("GZIP","LZ4","BR","XZ")) {
-            Write-Log ("[FOUND COMPRESSED] type=" + $container + " for " + $filePath + " (not automatically decompressing all formats).") "Yellow"
-            # attempt to extract gzip only (common)
-            if ($container -eq "GZIP") {
-                $tmpFile = Join-Path $tempRoot ([System.Guid]::NewGuid().ToString())
-                try {
-                    # Use System.IO.Compression.GzipStream via .NET to decompress first chunk to file
-                    $inStream = [System.IO.File]::OpenRead($filePath)
-                    $gz = New-Object System.IO.Compression.GzipStream($inStream, [System.IO.Compression.CompressionMode]::Decompress)
-                    $outFile = Join-Path $tempRoot "decompressed.bin"
-                    $outFs = [System.IO.File]::OpenWrite($outFile)
-                    $buffer = New-Object byte[] 8192
-                    while (($read = $gz.Read($buffer,0,$buffer.Length)) -gt 0) {
-                        $outFs.Write($buffer,0,$read)
-                    }
-                    $gz.Close(); $inStream.Close(); $outFs.Close()
-                    Scan-Folder-For-Native (Split-Path $outFile -Parent) 0
-                    Remove-Item $outFile -Force -ErrorAction SilentlyContinue
-                } catch {
-                    Write-Log ("[ERROR] Failed to decompress gzip: " + $filePath + " (" + $_.Exception.Message + ")") "Yellow"
+        } elseif ($container -in @("GZIP")) {
+            Write-Log ("[GZIP] Attempt decompress: " + $filePath) "Yellow"
+            $tmpOut = Join-Path $tempRoot ([System.Guid]::NewGuid().ToString() + ".bin")
+            try {
+                $inStream = [System.IO.File]::OpenRead($filePath)
+                $gz = New-Object System.IO.Compression.GzipStream($inStream, [System.IO.Compression.CompressionMode]::Decompress)
+                $outFs = [System.IO.File]::OpenWrite($tmpOut)
+                $buffer = New-Object byte[] 8192
+                while (($read = $gz.Read($buffer,0,$buffer.Length)) -gt 0) {
+                    $outFs.Write($buffer,0,$read)
                 }
+                $gz.Close(); $inStream.Close(); $outFs.Close()
+                Scan-Folder-For-Native (Split-Path $tmpOut -Parent) 0
+                Remove-Item $tmpOut -Force -ErrorAction SilentlyContinue
+            } catch {
+                $ex = $_
+                Write-Log ("[ERROR] gzip decompress failed: " + $filePath + " (" + $ex.Exception.Message + ")") "Yellow"
             }
             return
         } else {
-            # No container detected; test for raw ELF within file by scanning many bytes for ELF header
+            # scan first 128KB for embedded ELF
             try {
                 $raw = Get-Content -Path $filePath -Encoding Byte -TotalCount 131072 -ErrorAction SilentlyContinue
                 for ($i=0; $i -lt ($raw.Length - 4); $i++) {
                     if ($raw[$i] -eq 0x7F -and $raw[$i+1] -eq 0x45 -and $raw[$i+2] -eq 0x4C -and $raw[$i+3] -eq 0x46) {
-                        # found embedded ELF at offset $i
-                        Write-Log ("[EMBEDDED ELF] Found ELF header at offset " + $i + " in " + $filePath) "Magenta"
-                        # Extract the tail starting at offset and write a temp file to check
+                        Write-Log ("[EMBEDDED ELF] offset " + $i + " in " + $filePath) "Magenta"
                         $tmpFile = Join-Path $tempRoot ("embedded_" + [System.Guid]::NewGuid().ToString() + ".so")
                         $fs = [System.IO.File]::OpenWrite($tmpFile)
                         $fs.Write($raw, $i, $raw.Length - $i)
@@ -386,98 +313,147 @@ function Analyze-ArbitraryFile {
                     }
                 }
             } catch {
-                Write-Log ("[ERROR] Could not inspect large file bytes: " + $filePath + " (" + $_.Exception.Message + ")") "Yellow"
+                $ex = $_
+                Write-Log ("[ERROR] could not inspect bytes: " + $filePath + " (" + $ex.Exception.Message + ")") "Yellow"
             }
         }
     } catch {
-        Write-Log ("[ERROR] Analyze failed: " + $filePath + " (" + $_.Exception.Message + ")") "Yellow"
+        $ex = $_
+        Write-Log ("[ERROR] Analyze failed: " + $filePath + " (" + $ex.Exception.Message + ")") "Yellow"
     }
 }
 
-# -------------------------------
-# Execution steps
-# -------------------------------
+# scan dex for JNI strings
+function Scan-Dex-For-JNI {
+    param([string]$dexPath)
+    if (-not (Test-Path $dexPath)) { return }
+    $script:scannedDexFiles++
+    Write-Log ("[DEX] Scanning: " + $dexPath) "Cyan"
 
-# 1) Standard .so files in all subfolders
-Write-Log ("--- STEP 1: Scan standard .so files recursively ---") "Magenta"
-$soFiles = Get-ChildItem -Path $apkExtractRoot -Recurse -Filter *.so -File -ErrorAction SilentlyContinue
-Write-Log ("Found " + $soFiles.Count + " direct .so file(s) under root.") "Yellow"
-foreach ($s in $soFiles) {
-    try {
-        $script:scannedExtensions.Add($s.Extension) | Out-Null
-        Write-Log ("Found .so file: " + $s.FullName) "Gray"
-        Check-SoFile $s.FullName
-    } catch {
-        Write-Log ("[ERROR] scanning .so: " + $s.FullName + " (" + $_.Exception.Message + ")") "Yellow"
-    }
-}
-
-# 2) Find and extract jar/aar/zip archives and scan inside (nested extraction)
-Write-Log ("`n--- STEP 2: Scan archives (jar/aar/zip) and nested contents ---") "Magenta"
-$archives = Get-ChildItem -Path $apkExtractRoot -Recurse -Include *.jar,*.aar,*.zip -File -ErrorAction SilentlyContinue
-Write-Log ("Found " + $archives.Count + " archive(s) to inspect.") "Yellow"
-foreach ($a in $archives) {
-    try {
-        $script:scannedExtensions.Add($a.Extension) | Out-Null
-        Write-Log ("Archive: " + $a.FullName) "Gray"
-        $tmp = Join-Path $tempRoot ([System.Guid]::NewGuid().ToString())
-        New-Item -ItemType Directory -Path $tmp | Out-Null
-        if (Extract-Archive-To $a.FullName $tmp) {
-            Scan-Folder-For-Native $tmp 0
+    foreach ($p in $dexPatterns) {
+        # try Select-String first
+        try {
+            $matches = Select-String -Path $dexPath -Pattern $p -SimpleMatch -ErrorAction SilentlyContinue
+            if ($matches) {
+                foreach ($m in $matches) {
+                    Write-Log ("[DEX MATCH] pattern: '" + $p + "' in " + $dexPath + " -> " + $m.Line.Trim()) "Yellow"
+                    $script:dexMatches++
+                }
+            }
+        } catch {
+            # fallback: binary read and ASCII search
+            try {
+                $bytes = Get-Content -Path $dexPath -Encoding Byte -ErrorAction SilentlyContinue
+                $txt = [System.Text.Encoding]::ASCII.GetString($bytes)
+                if ($txt.IndexOf($p,[StringComparison]::InvariantCultureIgnoreCase) -ge 0) {
+                    Write-Log ("[DEX MATCH-BYTES] pattern: '" + $p + "' in " + $dexPath) "Yellow"
+                    $script:dexMatches++
+                }
+            } catch {
+                $ex = $_
+                Write-Log ("[ERROR] Could not search dex: " + $dexPath + " (" + $ex.Exception.Message + ")") "Yellow"
+            }
         }
-        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
-    } catch {
-        Write-Log ("[ERROR] processing archive: " + $a.FullName + " (" + $_.Exception.Message + ")") "Yellow"
     }
 }
 
-# 3) Deep scan of assets / res/raw / META-INF / root for embedded ELF or compressed containers
-Write-Log ("`n--- STEP 3: Deep scan arbitrary assets/.bin/.dat and META-INF for hidden native code ---") "Magenta"
+# -------------------------------
+# Execution phases with progress indicators
+# -------------------------------
+
+# Phase 1: scan direct .so files recursively
+Write-Log ("--- PHASE 1: Scanning direct .so files (recursive) ---") "Magenta"
+$soFilesAll = Get-ChildItem -Path $apkExtractRoot -Recurse -Filter *.so -File -ErrorAction SilentlyContinue
+$totalSo = $soFilesAll.Count
+Write-Log ("Found " + $totalSo + " direct .so file(s).") "Yellow"
+$index = 0
+foreach ($s in $soFilesAll) {
+    $index++
+    $pct = if ($totalSo -gt 0) { [int](($index / [double]$totalSo) * 100) } else { 100 }
+    Write-Progress -Activity "Phase 1: Scanning direct .so files" -Status ("Scanning " + (Get-Spinner)) -PercentComplete $pct -CurrentOperation $s.FullName
+    Write-Log ("[FOUND .so] " + $s.FullName) "Gray"
+    Check-SoFile $s.FullName
+}
+Write-Progress -Activity "Phase 1: Scanning direct .so files" -Completed
+
+# Phase 2: scan archives across root (jar/aar/zip)
+Write-Log ("`n--- PHASE 2: Scanning archives (jar/aar/zip) ---") "Magenta"
+$archivesAll = Get-ChildItem -Path $apkExtractRoot -Recurse -Include *.jar,*.aar,*.zip -File -ErrorAction SilentlyContinue
+$totalArchives = $archivesAll.Count
+Write-Log ("Found " + $totalArchives + " archive(s) at root to inspect.") "Yellow"
+$idx = 0
+foreach ($a in $archivesAll) {
+    $idx++
+    $pct2 = if ($totalArchives -gt 0) { [int](($idx / [double]$totalArchives) * 100) } else { 100 }
+    Write-Progress -Activity "Phase 2: Processing archives" -Status ("Processing " + (Get-Spinner)) -PercentComplete $pct2 -CurrentOperation $a.FullName
+    Write-Log ("[ARCHIVE] " + $a.FullName) "Gray"
+    $tmpA = Join-Path $tempRoot ([System.Guid]::NewGuid().ToString())
+    New-Item -ItemType Directory -Path $tmpA | Out-Null
+    if (Extract-Archive-To $a.FullName $tmpA) {
+        Scan-Folder-For-Native $tmpA 0
+    }
+    Remove-Item $tmpA -Recurse -Force -ErrorAction SilentlyContinue
+}
+Write-Progress -Activity "Phase 2: Processing archives" -Completed
+
+# Phase 3: deep scan arbitrary assets/res/raw/META-INF/root
+Write-Log ("`n--- PHASE 3: Deep scan of assets / res/raw / META-INF / root ---") "Magenta"
 $deepDirs = @((Join-Path $apkExtractRoot "assets"), (Join-Path $apkExtractRoot "res\raw"), (Join-Path $apkExtractRoot "META-INF"), $apkExtractRoot)
-$filesToCheck = @()
+$filesToCheck = New-Object System.Collections.ArrayList
 foreach ($d in $deepDirs) {
     if (Test-Path $d) {
-        Write-Log ("Queueing files under: " + $d) "Gray"
+        Write-Log ("Queuing files under: " + $d) "Gray"
         $items = Get-ChildItem -Path $d -Recurse -File -ErrorAction SilentlyContinue
-        foreach ($it in $items) { $filesToCheck += $it }
+        foreach ($it in $items) { [void]$filesToCheck.Add($it) }
     }
 }
-Write-Log ("Total candidate files for deep analysis: " + $filesToCheck.Count) "Yellow"
+$totalDeep = $filesToCheck.Count
+Write-Log ("Total candidate files for deep analysis: " + $totalDeep) "Yellow"
+$k = 0
 foreach ($f in $filesToCheck) {
+    $k++
+    $pct3 = if ($totalDeep -gt 0) { [int](($k / [double]$totalDeep) * 100) } else { 100 }
+    Write-Progress -Activity "Phase 3: Deep scan" -Status ("Scanning " + (Get-Spinner)) -PercentComplete $pct3 -CurrentOperation $f.FullName
     Analyze-ArbitraryFile $f.FullName
 }
+Write-Progress -Activity "Phase 3: Deep scan" -Completed
 
-# 4) Scan .dex files for JNI/native references
-Write-Log ("`n--- STEP 4: Scanning .dex files for JNI/native references ---") "Magenta"
+# Phase 4: scan .dex files for JNI/native strings
+Write-Log ("`n--- PHASE 4: Scanning .dex files for JNI/native references ---") "Magenta"
 $dexFiles = Get-ChildItem -Path $apkExtractRoot -Recurse -Include *.dex -File -ErrorAction SilentlyContinue
-Write-Log ("Found " + $dexFiles.Count + " .dex file(s).") "Yellow"
+$totalDex = $dexFiles.Count
+Write-Log ("Found " + $totalDex + " .dex file(s).") "Yellow"
+$di = 0
 foreach ($d in $dexFiles) {
-    try {
-        $script:scannedExtensions.Add($d.Extension) | Out-Null
-        Scan-Dex-For-JNI $d.FullName
-    } catch {
-        Write-Log ("[ERROR] scanning dex: " + $d.FullName + " (" + $_.Exception.Message + ")") "Yellow"
+    $di++
+    $pct4 = if ($totalDex -gt 0) { [int](($di / [double]$totalDex) * 100) } else { 100 }
+    Write-Progress -Activity "Phase 4: Scanning DEX files" -Status ("Searching " + (Get-Spinner)) -PercentComplete $pct4 -CurrentOperation $d.FullName
+    Scan-Dex-For-JNI $d.FullName
+}
+Write-Progress -Activity "Phase 4: Scanning DEX files" -Completed
+
+# Phase 5: quick text-scan of jars/classes for patterns
+Write-Log ("`n--- PHASE 5: Quick text-scan in .jar/.class for JNI strings ---") "Magenta"
+$codeCandidates = Get-ChildItem -Path $apkExtractRoot -Recurse -Include *.jar,*.class -File -ErrorAction SilentlyContinue
+$totalCode = $codeCandidates.Count
+$ci = 0
+foreach ($c in $codeCandidates) {
+    $ci++
+    $pct5 = if ($totalCode -gt 0) { [int](($ci / [double]$totalCode) * 100) } else { 100 }
+    Write-Progress -Activity "Phase 5: Text-scan code archives" -Status ("Scanning " + (Get-Spinner)) -PercentComplete $pct5 -CurrentOperation $c.FullName
+    Write-Log ("[CODE-SCAN] " + $c.FullName) "Gray"
+    foreach ($p in $dexPatterns) {
+        try {
+            $matches = Select-String -Path $c.FullName -Pattern $p -SimpleMatch -ErrorAction SilentlyContinue
+            if ($matches) {
+                foreach ($m in $matches) {
+                    Write-Log ("[CODE-STR MATCH] " + $p + " in " + $c.FullName + " -> " + $m.Line.Trim()) "Yellow"
+                }
+            }
+        } catch {}
     }
 }
-
-# 5) Extra: Also try scanning .class/.jar content strings (if present)
-Write-Log ("`n--- STEP 5: Extra string scan for .class/.jar files (simple text search) ---") "Magenta"
-$codeArchives = Get-ChildItem -Path $apkExtractRoot -Recurse -Include *.jar,*.class -File -ErrorAction SilentlyContinue
-foreach ($c in $codeArchives) {
-    try {
-        Write-Log ("Text-scan: " + $c.FullName) "Gray"
-        foreach ($p in $dexPatterns) {
-            try {
-                $matches = Select-String -Path $c.FullName -Pattern $p -SimpleMatch -ErrorAction SilentlyContinue
-                if ($matches) {
-                    foreach ($m in $matches) {
-                        Write-Log ("[CODE-STR MATCH] " + $p + " in " + $c.FullName + " -> " + $m.Line.Trim()) "Yellow"
-                    }
-                }
-            } catch { }
-        }
-    } catch { }
-}
+Write-Progress -Activity "Phase 5: Text-scan code archives" -Completed
 
 # -------------------------------
 # Final Summary
@@ -505,7 +481,7 @@ Report file: $reportFile
 
 Write-Log $summary "Yellow"
 Add-Content -Path $reportFile -Value ("Scan finished: " + (Get-Date).ToString("o"))
-Write-Host "Scan complete. Report: $reportFile" -ForegroundColor Cyan
+Write-Host "Scan complete. Report saved to: $reportFile" -ForegroundColor Cyan
 
-# Cleanup temp root - comment this line if you need to inspect extracted files
+# Uncomment to remove temp extraction artifacts automatically
 # Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
